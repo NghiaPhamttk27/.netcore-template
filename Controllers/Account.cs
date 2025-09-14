@@ -1,7 +1,11 @@
-﻿using Microsoft.AspNetCore.Identity;
+﻿using Azure.Core;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens;
 using System.ComponentModel.DataAnnotations;
-using System.Threading.Tasks;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
 
 namespace netcoretemplate.Controllers
 {
@@ -12,15 +16,18 @@ namespace netcoretemplate.Controllers
         private readonly UserManager<IdentityUser> _userManager;
         private readonly RoleManager<IdentityRole> _roleManager;
         private readonly SignInManager<IdentityUser> _signInManager;
+        private readonly IConfiguration _configuration;
 
         public AccountController(
             UserManager<IdentityUser> userManager,
             RoleManager<IdentityRole> roleManager,
-            SignInManager<IdentityUser> signInManager)
+            SignInManager<IdentityUser> signInManager,
+            IConfiguration configuration)
         {
             _userManager = userManager;
             _roleManager = roleManager;
             _signInManager = signInManager;
+            _configuration = configuration;
         }
 
         public class RegisterRequest
@@ -30,13 +37,6 @@ namespace netcoretemplate.Controllers
             public string Password { get; set; }
         }
 
-        // POST api/account/register
-        //{
-        //  "userName": "nghiapham",
-        //  "email": "nghiapham@example.com",
-        //  "password": "Password123!",
-        //  "role": "Admin"
-        //}
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] RegisterRequest model)
         {
@@ -50,93 +50,16 @@ namespace netcoretemplate.Controllers
                 EmailConfirmed = true
             };
 
-            // Tạo user
             var result = await _userManager.CreateAsync(user, model.Password);
-
-            await _userManager.AddToRoleAsync(user, "User");
 
             if (!result.Succeeded)
                 return BadRequest(result.Errors);
+
+            // Gán mặc định role User
+            await _userManager.AddToRoleAsync(user, "User");
 
             return Ok($"User '{model.UserName}' registered successfully.");
         }
-
-        // deleteh api/account/delete?userName=nghia
-        [HttpDelete("delete")]
-        public async Task<IActionResult> DeleteUser([FromQuery] string userName)
-        {
-            if (string.IsNullOrWhiteSpace(userName))
-                return BadRequest("UserName is required.");
-
-            var user = await _userManager.FindByNameAsync(userName);
-            if (user == null)
-                return NotFound($"User '{userName}' not found.");
-
-            var result = await _userManager.DeleteAsync(user);
-
-            if (result.Succeeded)
-                return Ok($"User '{userName}' deleted successfully.");
-
-            return BadRequest(result.Errors);
-        }
-
-        public class UpdateUserRequest
-        {
-            [Required]
-            public string UserName { get; set; }
-
-            public string? NewUserName { get; set; }
-            public string? NewEmail { get; set; }
-            public string? NewPassword { get; set; }
-        }
-
-
-        //        PUT api/account/update
-        //Content-Type: application/json
-
-        //{
-        //  "userName": "admin",
-        //  "newUserName": "superadmin",
-        //  "newEmail": "superadmin@example.com",
-        //  "newPassword": "NewPass123!"
-        //}
-
-        [HttpPut("update")]
-        public async Task<IActionResult> UpdateUser([FromBody] UpdateUserRequest model)
-        {
-            if (string.IsNullOrWhiteSpace(model.UserName))
-                return BadRequest("UserName is required.");
-
-            var user = await _userManager.FindByNameAsync(model.UserName);
-            if (user == null)
-                return NotFound($"User '{model.UserName}' not found.");
-
-            // Cập nhật UserName
-            if (!string.IsNullOrWhiteSpace(model.NewUserName))
-                user.UserName = model.NewUserName;
-
-            // Cập nhật Email
-            if (!string.IsNullOrWhiteSpace(model.NewEmail))
-                user.Email = model.NewEmail;
-
-            // Update user info
-            var result = await _userManager.UpdateAsync(user);
-            if (!result.Succeeded)
-                return BadRequest(result.Errors);
-
-            // Đổi password (nếu có nhập)
-            if (!string.IsNullOrWhiteSpace(model.NewPassword))
-            {
-                var token = await _userManager.GeneratePasswordResetTokenAsync(user);
-                var passResult = await _userManager.ResetPasswordAsync(user, token, model.NewPassword);
-
-                if (!passResult.Succeeded)
-                    return BadRequest(passResult.Errors);
-            }
-
-            return Ok($"User '{model.UserName}' updated successfully.");
-        }
-
 
         public class LoginRequest
         {
@@ -147,34 +70,65 @@ namespace netcoretemplate.Controllers
             public string Password { get; set; }
         }
 
-        [HttpPost("login")]
-        public async Task<IActionResult> Login([FromBody] LoginRequest model)
+        //[HttpPost("login")]
+        //public async Task<IActionResult> Login([FromBody] LoginRequest model)
+        //{
+        //    var user = await _userManager.FindByNameAsync(model.UserName);
+        //    if (user == null)
+        //        return Unauthorized("Invalid username or password.");
+
+        //    var result = await _signInManager.CheckPasswordSignInAsync(user, model.Password, false);
+        //    if (!result.Succeeded)
+        //        return Unauthorized("Invalid username or password.");
+
+        //    return Ok(new { user.UserName, user.Email });
+        //}
+
+        [HttpPost("token")]
+        public async Task<IActionResult> GetToken([FromBody] LoginRequest model)
         {
-            if (!ModelState.IsValid)
-                return BadRequest(ModelState);
-
-            if (string.IsNullOrWhiteSpace(model.UserName) || string.IsNullOrWhiteSpace(model.Password))
-                return BadRequest("UserName and Password are required.");
-
-            // Lấy user từ UserManager
             var user = await _userManager.FindByNameAsync(model.UserName);
-            if (user == null)
-                return Unauthorized("Invalid username or password.");
+            if (user == null || !(await _userManager.CheckPasswordAsync(user, model.Password)))
+            {
+                return Unauthorized();
+            }
 
-            // Kiểm tra password
-            var result = await _signInManager.CheckPasswordSignInAsync(user, model.Password, lockoutOnFailure: false);
-        
-            if (!result.Succeeded)
-                return Unauthorized("Invalid username or password.");
+            var userRoles = await _userManager.GetRolesAsync(user);
 
-            return Ok(new
+            var claims = new List<Claim>
+            {
+                new Claim(JwtRegisteredClaimNames.Sub, user.UserName),
+                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+            };
+
+            claims.AddRange(userRoles.Select(r => new Claim(ClaimTypes.Role, r)));
+
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["Jwt:Key"]));
+            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+            var expires = DateTime.UtcNow.AddDays(14);
+
+            var token = new JwtSecurityToken(
+                    issuer: _configuration["Jwt:Issuer"],
+                    audience: _configuration["Jwt:Issuer"],
+                    claims: claims,
+                    expires: expires,
+                    signingCredentials: creds);
+
+            var accessToken = new JwtSecurityTokenHandler().WriteToken(token);
+
+            return Ok(new Dictionary<string, object>
                 {
-                    user.UserName,
-                    user.Email
-                }
-            );
+                    { "access_token", accessToken },
+                    { "token_type", "bearer" },
+                    { "expires_in", (int)TimeSpan.FromDays(14).TotalSeconds },
+                    { "userName", user.UserName },
+                    { "userId", user.Id },
+                    { "role", userRoles.FirstOrDefault() ?? "User" },
+                    { ".issued", DateTime.UtcNow.ToString("r") },
+                    { ".expires", expires.ToString("r") }
+                });
         }
-
 
 
     }
