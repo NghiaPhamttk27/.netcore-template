@@ -70,20 +70,6 @@ namespace netcoretemplate.Controllers
             public string Password { get; set; }
         }
 
-        //[HttpPost("login")]
-        //public async Task<IActionResult> Login([FromBody] LoginRequest model)
-        //{
-        //    var user = await _userManager.FindByNameAsync(model.UserName);
-        //    if (user == null)
-        //        return Unauthorized("Invalid username or password.");
-
-        //    var result = await _signInManager.CheckPasswordSignInAsync(user, model.Password, false);
-        //    if (!result.Succeeded)
-        //        return Unauthorized("Invalid username or password.");
-
-        //    return Ok(new { user.UserName, user.Email });
-        //}
-
         [HttpPost("token")]
         public async Task<IActionResult> GetToken([FromBody] LoginRequest model)
         {
